@@ -45,6 +45,16 @@ jobs:
           test -f source/Yaseen_Android_NewRepo/settings.gradle
           test -f source/Yaseen_Android_NewRepo/app/google-services.json
 
+      - name: Set minimum Android version to API 24
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP_GRADLE="source/Yaseen_Android_NewRepo/app/build.gradle"
+          grep -q 'minSdk 23' "$APP_GRADLE"
+          sed -i 's/minSdk 23/minSdk 24/' "$APP_GRADLE"
+          grep -q 'minSdk 24' "$APP_GRADLE"
+          ! grep -q 'minSdk 23' "$APP_GRADLE"
+
       - name: Configure Maven Central mirror
         shell: bash
         run: |
@@ -76,7 +86,6 @@ jobs:
           include ':app'
           GRADLE
           grep -q 'GoogleHostedMavenCentralMirror' source/Yaseen_Android_NewRepo/settings.gradle
-          grep -q 'minSdk 23' source/Yaseen_Android_NewRepo/app/build.gradle
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
