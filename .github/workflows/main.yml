@@ -1,10 +1,11 @@
 
-name: Yaseen Kirana Store - Signed APK Build
+name: Yaseen Kirana Store - Signed Release APKs
 
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches:
+      - main
     paths:
       - 'Yaseen_Kirana_Store_Android_NewRepo_Source_v1.zip'
       - '.github/workflows/main.yml'
@@ -14,6 +15,7 @@ permissions:
 
 jobs:
   build:
+    name: Build Customer and Admin Release APKs
     runs-on: ubuntu-latest
 
     env:
@@ -23,23 +25,35 @@ jobs:
       ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
 
     steps:
-      - name: Checkout repository
+      - name: Checkout source
         uses: actions/checkout@v4
 
-      - name: Check signing secrets
+      - name: Verify signing secrets
         shell: bash
         run: |
+          set -euo pipefail
           test -n "$ANDROID_KEYSTORE_BASE64"
           test -n "$ANDROID_KEYSTORE_PASSWORD"
           test -n "$ANDROID_KEY_ALIAS"
           test -n "$ANDROID_KEY_PASSWORD"
 
-      - name: Extract Android source ZIP
+      - name: Extract Android project
+        shell: bash
         run: |
+          set -euo pipefail
           unzip -q Yaseen_Kirana_Store_Android_NewRepo_Source_v1.zip -d source
           test -f source/Yaseen_Android_NewRepo/app/build.gradle
           test -f source/Yaseen_Android_NewRepo/settings.gradle
           test -f source/Yaseen_Android_NewRepo/app/google-services.json
+
+      - name: Fix Firebase minimum Android version
+        shell: bash
+        run: |
+          set -euo pipefail
+          FILE="source/Yaseen_Android_NewRepo/app/build.gradle"
+          grep -q 'minSdk 23' "$FILE"
+          sed -i 's/minSdk 23/minSdk 24/' "$FILE"
+          grep -q 'minSdk 24' "$FILE"
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
@@ -47,21 +61,32 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Install Android SDK 35
-        run: sdkmanager 'platforms;android-35' 'build-tools;35.0.0'
+      - name: Install Android SDK packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDK="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
+          test -d "$SDK/cmdline-tools"
+          SDKMANAGER="$(find "$SDK/cmdline-tools" -type f -name sdkmanager | sort -V | tail -n 1)"
+          test -x "$SDKMANAGER"
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" --install \
+            "platforms;android-35" \
+            "build-tools;35.0.0"
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          echo "$SDK/platform-tools" >> "$GITHUB_PATH"
+          echo "$SDK/build-tools/35.0.0" >> "$GITHUB_PATH"
 
       - name: Set up Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
 
-      - name: Prepare and verify signing key
+      - name: Prepare and verify release signing key
         shell: bash
         run: |
-          echo "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/yaseen-release.jks"
+          set -euo pipefail
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/yaseen-release.jks"
           test -s "$RUNNER_TEMP/yaseen-release.jks"
           keytool -list \
             -keystore "$RUNNER_TEMP/yaseen-release.jks" \
@@ -69,24 +94,44 @@ jobs:
             -alias "$ANDROID_KEY_ALIAS"
           echo "ANDROID_KEYSTORE_PATH=$RUNNER_TEMP/yaseen-release.jks" >> "$GITHUB_ENV"
 
-      - name: Build Customer and Admin signed Release APKs
+      - name: Build signed Customer and Admin Release APKs
         working-directory: source/Yaseen_Android_NewRepo
-        run: |
-          gradle --no-daemon :app:assembleCustomerRelease :app:assembleAdminRelease
-
-      - name: Verify and collect APKs
         shell: bash
         run: |
-          mkdir -p dist
-          cp source/Yaseen_Android_NewRepo/app/build/outputs/apk/customer/release/*.apk dist/Yaseen-Kirana-Customer.apk
-          cp source/Yaseen_Android_NewRepo/app/build/outputs/apk/admin/release/*.apk dist/Yaseen-Kirana-Admin.apk
-          sha256sum dist/*.apk > dist/SHA256SUMS.txt
-          echo "BUILD_TYPE=signed-release" > dist/BUILD_INFO.txt
+          set -euo pipefail
+          gradle --no-daemon \
+            :app:assembleCustomerRelease \
+            :app:assembleAdminRelease
 
-      - name: Upload signed APKs
+      - name: Verify signed APKs and prepare downloads
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          CUSTOMER_DIR="source/Yaseen_Android_NewRepo/app/build/outputs/apk/customer/release"
+          ADMIN_DIR="source/Yaseen_Android_NewRepo/app/build/outputs/apk/admin/release"
+
+          CUSTOMER_APK="$(find "$CUSTOMER_DIR" -maxdepth 1 -type f -name '*.apk' | head -n 1)"
+          ADMIN_APK="$(find "$ADMIN_DIR" -maxdepth 1 -type f -name '*.apk' | head -n 1)"
+
+          test -n "$CUSTOMER_APK"
+          test -n "$ADMIN_APK"
+
+          mkdir -p dist
+          cp "$CUSTOMER_APK" dist/Yaseen-Kirana-Customer.apk
+          cp "$ADMIN_APK" dist/Yaseen-Kirana-Admin.apk
+
+          apksigner verify --verbose dist/Yaseen-Kirana-Customer.apk
+          apksigner verify --verbose dist/Yaseen-Kirana-Admin.apk
+
+          sha256sum dist/*.apk > dist/SHA256SUMS.txt
+          echo "BUILD_TYPE=SIGNED_RELEASE" > dist/BUILD_INFO.txt
+
+      - name: Upload Customer and Admin APKs
         uses: actions/upload-artifact@v4
         with:
-          name: Yaseen-Kirana-Store-Signed-APKs
+          name: Yaseen-Kirana-Store-Signed-Release-APKs
           path: dist/*
           if-no-files-found: error
           retention-days: 90
+
